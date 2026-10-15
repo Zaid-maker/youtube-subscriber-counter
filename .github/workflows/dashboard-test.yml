@@ -1,0 +1,60 @@
+name: Subscriber Counter Dashboard Test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  capture-test:
+    # A short verification run only. Do not use Actions as a continuous streaming host.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install browser and capture tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg xvfb
+          npm install playwright
+          npx playwright install --with-deps chromium
+
+      - name: Capture a 30-second preview
+        env:
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+          YOUTUBE_CHANNEL_ID: ${{ secrets.YOUTUBE_CHANNEL_ID }}
+        run: |
+          set -euo pipefail
+          test -n "$YOUTUBE_API_KEY"
+          test -n "$YOUTUBE_CHANNEL_ID"
+          python3 server.py > /tmp/counter-server.log 2>&1 &
+          SERVER_PID=$!
+          Xvfb :99 -screen 0 1280x720x24 -nolisten tcp > /tmp/xvfb.log 2>&1 &
+          XVFB_PID=$!
+          cleanup() {
+            kill "$SERVER_PID" "$XVFB_PID" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+          for i in $(seq 1 20); do
+            if curl -fsS http://127.0.0.1:8000/api/count >/tmp/count.json; then break; fi
+            sleep 1
+          done
+          cat /tmp/count.json
+          DISPLAY=:99 node -e "const { chromium } = require('playwright'); (async()=>{ const b=await chromium.launch({headless:false,args:['--no-sandbox','--disable-dev-shm-usage']}); const p=await b.newPage({viewport:{width:1280,height:720}}); await p.goto('http://127.0.0.1:8000/'); await new Promise(()=>{}); })().catch(e=>{console.error(e);process.exit(1)})" > /tmp/chromium.log 2>&1 &
+          CHROME_PID=$!
+          sleep 5
+          mkdir -p output
+          ffmpeg -y -f x11grab -framerate 10 -video_size 1280x720 \
+            -i :99.0 -t 30 -an -c:v libx264 -preset ultrafast \
+            -pix_fmt yuv420p output/subscriber-counter-preview.mp4
+          kill "$CHROME_PID" 2>/dev/null || true
+
+      - name: Upload preview video
+        uses: actions/upload-artifact@v4
+        with:
+          name: subscriber-counter-preview
+          path: output/subscriber-counter-preview.mp4
+          retention-days: 1

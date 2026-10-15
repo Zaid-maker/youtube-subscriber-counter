@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Live Subscriber Counter</title>
+<style>
+  :root { color-scheme: dark; --bg:#08090d; --panel:#11131a; --muted:#9ba3b4; --white:#f7f8fb; --red:#ff3448; --green:#38d996; }
+  * { box-sizing:border-box }
+  html,body { margin:0; width:100%; height:100%; background:radial-gradient(ellipse at 50% 36%,#191b26 0%,var(--bg) 64%); color:var(--white); font-family:Inter,ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; }
+  body { display:grid; place-items:center; overflow:hidden; }
+  main { width:min(94vw,1100px); text-align:center; padding:34px 20px; }
+  .live { display:inline-flex; align-items:center; gap:9px; padding:8px 13px; border:1px solid #3a2028; background:#1d1015; border-radius:999px; color:#ff6472; font-size:13px; font-weight:800; letter-spacing:.16em; text-transform:uppercase; }
+  .dot { width:8px;height:8px;border-radius:50%;background:var(--red);box-shadow:0 0 16px #ff3448;animation:pulse 1.6s infinite; }
+  h1 { font-size:clamp(20px,3vw,34px);font-weight:650;letter-spacing:-.035em;margin:25px 0 9px;color:#e6e8ef; }
+  .sub { color:var(--muted);font-size:clamp(12px,1.6vw,16px); }
+  .count-wrap { margin:32px auto 22px; padding:clamp(20px,4vw,44px) 14px; border:1px solid #272a36; border-radius:26px; background:linear-gradient(180deg,#151722e8,#0c0d13e8); box-shadow:0 24px 100px #0008,inset 0 1px #ffffff0a; }
+  #count { font-variant-numeric:tabular-nums; font-size:clamp(48px,12vw,128px); line-height:1.05; font-weight:850; letter-spacing:-.065em; text-shadow:0 0 36px #ffffff10; overflow-wrap:anywhere; }
+  #count.bump { animation:bump .42s ease; }
+  .label { margin-top:14px;color:#b8bdca;letter-spacing:.23em;font-size:clamp(10px,1.5vw,14px);font-weight:750;text-transform:uppercase; }
+  .meta { display:flex;justify-content:center;flex-wrap:wrap;gap:10px 22px;color:var(--muted);font-size:12px; }
+  .meta span { display:inline-flex;align-items:center;gap:7px; }
+  .status-dot { width:6px;height:6px;border-radius:50%;background:var(--green); }
+  #status { color:#aab2c2; margin-top:22px; min-height:18px;font-size:12px; }
+  .footer { margin-top:24px;color:#626a7a;font-size:10px;letter-spacing:.08em; }
+  @keyframes pulse {50%{opacity:.35;box-shadow:0 0 4px #ff3448} }
+  @keyframes bump {0%{transform:scale(1)}45%{transform:scale(1.018);color:#fff}100%{transform:scale(1)} }
+</style>
+</head>
+<body>
+<main>
+  <div class="live"><span class="dot"></span> Live counter</div>
+  <h1 id="channel">YouTube Channel</h1>
+  <div class="sub">Public subscriber count</div>
+  <section class="count-wrap" aria-live="polite">
+    <div id="count">—</div>
+    <div class="label">Subscribers</div>
+  </section>
+  <div class="meta"><span><i class="status-dot"></i><span id="state">Connecting to YouTube data</span></span><span id="updated">Waiting for first update</span></div>
+  <div id="status">Configure your channel and API key in the environment.</div>
+  <div class="footer">PUBLIC DATA · COUNT MAY BE ROUNDED BY YOUTUBE · NOT AN OFFICIAL YOUTUBE BROADCAST</div>
+</main>
+<script>
+const countEl=document.getElementById('count'), channelEl=document.getElementById('channel');
+const stateEl=document.getElementById('state'), updatedEl=document.getElementById('updated'), statusEl=document.getElementById('status');
+let previous=null;
+function format(n){return Number(n).toLocaleString('en-US');}
+async function refresh(){
+  try{
+    const r=await fetch('/api/count',{cache:'no-store'}); const data=await r.json();
+    if(!r.ok) throw new Error(data.error||'Request failed');
+    channelEl.textContent=data.title||'YouTube Channel';
+    if(previous!==data.subscriberCount){countEl.textContent=format(data.subscriberCount);countEl.classList.remove('bump');void countEl.offsetWidth;countEl.classList.add('bump');previous=data.subscriberCount;}
+    stateEl.textContent='Connected'; updatedEl.textContent='Updated '+new Date().toLocaleTimeString();
+    statusEl.textContent='Refreshes every 60 seconds. YouTube may round public subscriber counts.';
+  }catch(e){stateEl.textContent='Retrying';statusEl.textContent='Could not load public count: '+e.message;}
+}
+refresh(); setInterval(refresh,60000);
+</script>
+</body>
+</html>
