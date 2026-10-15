@@ -1,0 +1,133 @@
+
+name: YouTube Live Stream Test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  live-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install streaming tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg xvfb
+          npm install playwright
+          npx playwright install --with-deps chromium
+
+      - name: Start subscriber counter
+        env:
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+          YOUTUBE_CHANNEL_ID: ${{ secrets.YOUTUBE_CHANNEL_ID }}
+        run: |
+          set -euo pipefail
+          test -n "$YOUTUBE_API_KEY"
+          test -n "$YOUTUBE_CHANNEL_ID"
+
+          python3 server.py >/tmp/counter-server.log 2>&1 &
+          echo $! > /tmp/counter-server.pid
+
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8000/api/count \
+                -o /tmp/count.json; then
+              break
+            fi
+            sleep 1
+          done
+
+          test -s /tmp/count.json
+          python3 -c "import json; d=json.load(open('/tmp/count.json')); assert 'subscriberCount' in d"
+
+      - name: Start virtual display and browser
+        run: |
+          set -euo pipefail
+
+          Xvfb :99 -screen 0 1280x720x24 -nolisten tcp \
+            >/tmp/xvfb.log 2>&1 &
+          echo $! > /tmp/xvfb.pid
+
+          for i in $(seq 1 10); do
+            if DISPLAY=:99 xdpyinfo >/dev/null 2>&1; then
+              break
+            fi
+            sleep 1
+          done
+
+          DISPLAY=:99 node -e "
+            const { chromium } = require('playwright');
+            (async () => {
+              const browser = await chromium.launch({
+                headless: false,
+                args: ['--no-sandbox', '--disable-dev-shm-usage']
+              });
+              const page = await browser.newPage({
+                viewport: { width: 1280, height: 720 }
+              });
+              await page.goto('http://127.0.0.1:8000/', {
+                waitUntil: 'networkidle'
+              });
+              await page.waitForFunction(() =>
+                document.querySelector('#count')?.textContent.trim() !== '—',
+                { timeout: 20000 }
+              );
+              await new Promise(() => {});
+            })().catch(() => process.exit(1));
+          " >/tmp/chromium.log 2>&1 &
+
+          echo $! > /tmp/chromium.pid
+          sleep 5
+
+      - name: Broadcast counter to YouTube for 3 minutes
+        env:
+          YOUTUBE_RTMPS_URL: ${{ secrets.YOUTUBE_RTMPS_URL }}
+          YOUTUBE_STREAM_KEY: ${{ secrets.YOUTUBE_STREAM_KEY }}
+        run: |
+          set -euo pipefail
+
+          test -n "$YOUTUBE_RTMPS_URL"
+          test -n "$YOUTUBE_STREAM_KEY"
+
+          case "$YOUTUBE_RTMPS_URL" in
+            rtmps://*) ;;
+            *)
+              echo "The stream URL must start with rtmps://"
+              exit 1
+              ;;
+          esac
+
+          # Never print the publishing URL or stream key.
+          BASE_URL="${YOUTUBE_RTMPS_URL%/}"
+          PUBLISH_URL="${BASE_URL}/${YOUTUBE_STREAM_KEY}"
+
+          if ffmpeg -hide_banner -loglevel error \
+            -f x11grab -framerate 10 -video_size 1280x720 \
+            -i :99.0 \
+            -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 \
+            -t 180 \
+            -c:v libx264 -preset ultrafast -tune zerolatency \
+            -pix_fmt yuv420p -r 30 -g 60 \
+            -b:v 1500k -maxrate 1500k -bufsize 3000k \
+            -c:a aac -b:a 128k -ar 44100 \
+            -f flv "$PUBLISH_URL" >/tmp/ffmpeg.log 2>&1; then
+            echo "Three-minute broadcast transmission finished."
+          else
+            echo "Broadcast failed. FFmpeg logs were withheld to protect credentials."
+            exit 1
+          fi
+
+      - name: Stop browser and display
+        if: always()
+        run: |
+          for f in /tmp/chromium.pid /tmp/xvfb.pid /tmp/counter-server.pid; do
+            if [ -f "$f" ]; then
+              kill "$(cat "$f")" 2>/dev/null || true
+            fi
+          done
